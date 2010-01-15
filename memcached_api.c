@@ -311,12 +311,12 @@ int memcached_api_add(struct memcached_api *api, const char *const key, size_t k
 }
 
 int memcached_api_set(struct memcached_api *api, const char *const key, size_t key_len, void *data, size_t data_len,
-                      uint64_t cas, uint32_t flags, uint32_t expiery, memcached_cb_set callback_func,
+                      uint64_t cas, uint32_t flags, uint32_t expiry, memcached_cb_set callback_func,
                       void *callback_data)
 {
   uint32_t extra[2] = {
     htonl(flags),
-    htonl(expiery),
+    htonl(expiry),
   };
 
   struct memcached_msg msg = {

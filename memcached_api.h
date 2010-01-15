@@ -73,7 +73,7 @@ int memcached_api_get(struct memcached_api *api, const char *key, size_t key_len
 int memcached_api_add(struct memcached_api *ap, const char *const key, size_t key_len, void *data, size_t data_len,
                       memcached_cb_add callback, void *cb_data);
 int memcached_api_set(struct memcached_api *api, const char *const key, size_t key_len, void *data, size_t data_len,
-                      uint64_t cas, uint32_t flags, uint32_t expiery, memcached_cb_set callback_func,
+                      uint64_t cas, uint32_t flags, uint32_t expiry, memcached_cb_set callback_func,
                       void *callback_data);
 
 #endif /* __MEMCACHED_API__ */
