@@ -161,15 +161,13 @@ static int build_socket(struct sockaddr *addr, enum memcached_conn conn_type)
   if ((fd = socket(addr->sa_family, type, 0)) == -1)
     return -1;
 
+  /* Mark the file descriptor as non blocking so we can have non-blocking reads/writes and connect() */
+  if (evutil_make_socket_nonblocking(fd)== - 1)
+    goto fail;
+
   /* Connect the socket. Do this even in the udp case to so we don't have to use sendto(). Otherwise we have to
    * overwrite libevents write handler to use sendto() */
   if (connect(fd, addr, addr_len) == -1)
-    goto fail;
-
-#warning "FIXME: make this non blocking connect"
-
-  /* Mark the file descriptor as non blocking so we can have non-blocking reads/writes and connect() */
-  if (evutil_make_socket_nonblocking(fd)== - 1)
     goto fail;
 
   return fd;
