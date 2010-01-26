@@ -255,7 +255,7 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct sockaddr *
   socklen_t addrlen;
 
   for (int i = 0; i < num_hosts; i++) {
-    if (hosts->sa_family != AF_INET || hosts->sa_family != AF_INET6) {
+    if (hosts->sa_family != AF_INET && hosts->sa_family != AF_INET6) {
       errno = EAFNOSUPPORT;
       return -1;
     }
