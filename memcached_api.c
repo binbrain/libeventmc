@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+/* networking */
+#include <netinet/in.h>
+#include <sys/socket.h>
 /* BSDisms */
 #include "bsd_tree.h"
 /* libevent */
@@ -12,6 +15,7 @@
 #include "memcached_server.h"
 #include "memcached_api.h"
 #include "util.h"
+#include "crc32.h"
 
 struct pending_cmd
 {
@@ -130,19 +134,22 @@ static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_m
 }
 
 
-int memcached_hash_none(const char *key, ssize_t key_len)
+int memcached_hash_none(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
 {
   /* The naive case, always pick the first server */
   return 0;
 }
 
-int hash_crc32(const char *key, ssize_t key_len)
+int memcached_hash_crc32(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
 {
-  /* TODO: Implement */
-  return -1;
+  if (num_hosts == 0)
+    return 0;
+
+  crc32t sum = crc32update(crc32init(), (const unsigned char *) key, key_len);
+  return sum % num_hosts;
 }
 
-int hash_ketama(const char *key, ssize_t key_len)
+int memcached_hash_ketama(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
 {
   /* TODO: Implement */
   return -1;
@@ -150,7 +157,7 @@ int hash_ketama(const char *key, ssize_t key_len)
 
 struct memcached_host *get_host(struct memcached_api *api, const char *key, size_t key_len)
 {
-  int server_num = api->cb_func_hash(key, key_len);
+  int server_num = api->cb_func_hash(key, key_len, api->host_list, api->num_host);
 
   if (server_num <= -1 || server_num >= api->num_host) {
     errno = EBADSLT;
@@ -179,6 +186,14 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   if ((cmd = new_cmd(api, msg, callback_func, callback_data)) == NULL)
     return -1;
 
+  if (host->server_conn == NULL) {
+    if ((host->server_conn = memcached_init(api->event_base, (struct sockaddr *) &host->sockaddr, api->conn_type, 
+                                            cb_result, NULL, api)) == NULL)
+    {
+      return -1;
+    }
+  }
+
   /* Schedule the command to be sent, and if everything looks okay set the sequence number to the next id. */
   if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1) {
     RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
@@ -191,6 +206,50 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   return 0;
 }
 
+static inline int cmp_inet4(const struct sockaddr_in *addr1, const struct sockaddr_in *addr2)
+{
+  int cmp_addr;
+  if ((cmp_addr = addr1->sin_addr.s_addr - addr1->sin_addr.s_addr))
+    return cmp_addr;
+
+  return addr1->sin_port - addr1->sin_port;
+}
+
+static inline int cmp_inet6(const struct sockaddr_in6 *addr1, const struct sockaddr_in6 *addr2)
+{
+  int cmp_result;
+
+  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[0] - addr2->sin6_addr.in6_u.u6_addr32[0]))
+    return cmp_result;
+  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[1] - addr2->sin6_addr.in6_u.u6_addr32[1]))
+    return cmp_result;
+  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[2] - addr2->sin6_addr.in6_u.u6_addr32[2]))
+    return cmp_result;
+  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[3] - addr2->sin6_addr.in6_u.u6_addr32[3]))
+    return cmp_result;
+
+  return addr1->sin6_port - addr2->sin6_port;
+}
+
+static int cmp_servers(const void *l, const void *r)
+{
+  const struct memcached_host *h1 = (const struct memcached_host *) l;
+  const struct memcached_host *h2 = (const struct memcached_host *) r;
+
+  const struct sockaddr *a1 = (const struct sockaddr *) &h1->sockaddr;
+  const struct sockaddr *a2 = (const struct sockaddr *) &h2->sockaddr;
+
+  /* Make things work (maybe) when there's multiple familizies */
+  int protocol_cmp = a1->sa_family - a2->sa_family;
+  if (protocol_cmp != 0)
+    return protocol_cmp;
+
+  if (a1->sa_family == AF_INET)
+    return cmp_inet4(&h1->sockaddr.addr_4, &h2->sockaddr.addr_4);
+
+  return cmp_inet6(&h1->sockaddr.addr_6, &h2->sockaddr.addr_6);
+}
+
 static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_host hosts[])
 {
   struct memcached_host *dst, *src;
@@ -201,8 +260,7 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_
     src = &hosts[i];
 
     memcpy(&dst->sockaddr, &src->sockaddr, sizeof(dst->sockaddr));
-    dst->server_conn = memcached_init(api->event_base, (struct sockaddr *) &src->sockaddr, api->conn_type, cb_result,
-                                      NULL, api);
+    dst->server_conn = NULL;
 
     /* Failed to connect, free all the allocated hosts. */
     if (dst->server_conn == NULL) {
@@ -213,8 +271,11 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_
     }
   }
 
-  api->num_host = num_hosts;
+  /* Sort the servers by address name. So we pick consistent servers in between startups. */
+  if (num_hosts > 1)
+    qsort(api->host_list, num_hosts, sizeof(*api->host_list), cmp_servers);
 
+  api->num_host = num_hosts;
   return 0;
 }
 

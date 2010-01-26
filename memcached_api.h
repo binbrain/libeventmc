@@ -41,16 +41,17 @@ typedef void (*memcached_cb_replace)(struct memcached_api *api, enum memcached_r
 
 
 /* Hashing function callback prototype (for specifing custom hash functions). */
-typedef int (*memcached_hash_func)(const char *const key, ssize_t key_len);
+typedef int (*memcached_hash_func)(const char *const key, ssize_t key_len, const struct memcached_host *hosts,
+                                   int num_hosts);
 
 /*
  * Built in hash functions.
  *
  */
 
-int memcached_hash_none(const char *key, ssize_t key_len);
-int memcached_hash_crc32(const char *key, ssize_t key_len);
-int memcached_hash_ketama(const char *key, ssize_t key_len);
+int memcached_hash_none(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts);
+int memcached_hash_crc32(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts);
+int memcached_hash_ketama(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts);
 
 
 /*

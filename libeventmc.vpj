@@ -129,16 +129,19 @@
 		<Folder
 			Name="Source Files"
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl">
-			<F N="memcached_server.c"/>
+			<F N="crc32.c"/>
 			<F N="memcached_api.c"/>
+			<F N="memcached_server.c"/>
 			<F N="util.c"/>
 		</Folder>
 		<Folder
 			Name="Header Files"
 			Filters="*.h;*.H;*.hh;*.hpp;*.hxx;*.inc;*.sh;*.cpy;*.if">
+			<F N="bsd_tree.h"/>
 			<F N="common.h"/>
-			<F N="memcached_server.h"/>
+			<F N="crc32.h"/>
 			<F N="memcached_api.h"/>
+			<F N="memcached_server.h"/>
 			<F N="util.h"/>
 		</Folder>
 		<Folder
