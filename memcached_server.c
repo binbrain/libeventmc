@@ -167,8 +167,10 @@ static int build_socket(struct sockaddr *addr, enum memcached_conn conn_type)
 
   /* Connect the socket. Do this even in the udp case to so we don't have to use sendto(). Otherwise we have to
    * overwrite libevents write handler to use sendto() */
-  if (connect(fd, addr, addr_len) == -1)
-    goto fail;
+  if (connect(fd, addr, addr_len) == -1) {
+    if (errno != EINPROGRESS)
+      goto fail;
+  }
 
   return fd;
 

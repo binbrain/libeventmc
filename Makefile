@@ -1,7 +1,7 @@
 EVMC_VERSION:=0.1.1
 EVMC_PREFIX=$(DESTDIR)
 
-EVMC_CFLAGS:=-c -D_GNU_SOURCE -O2 -ggdb3 -DVERSION=\"$(EVMC_VERSION)\" -Wall --std=gnu99 -fPIC $(CFLAGS)
+EVMC_CFLAGS:=-c -D_GNU_SOURCE -O0 -ggdb3 -DVERSION=\"$(EVMC_VERSION)\" -Wall --std=gnu99 -fPIC $(CFLAGS)
 EVMC_LDFLAGS:=-levent $(LD_FLAGS)
 
 EVMC_CFILES:=util.c memcached_server.c memcached_api.c crc32.c

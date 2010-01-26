@@ -189,7 +189,7 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   if (host->server_conn == NULL) {
     if ((host->server_conn = memcached_init(api->event_base, (struct sockaddr *) &host->sockaddr, api->conn_type, 
                                             cb_result, NULL, api)) == NULL)
-    {
+    { 
       return -1;
     }
   }
@@ -252,15 +252,8 @@ static int cmp_servers(const void *l, const void *r)
 
 static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_host hosts[])
 {
-  struct memcached_host *dst, *src;
-
-  /* Free all the allocated data */
   for (int i = 0; i < num_hosts; i++) {
-    dst = &api->host_list[i];
-    src = &hosts[i];
-
-    memcpy(&dst->sockaddr, &src->sockaddr, sizeof(dst->sockaddr));
-    dst->server_conn = NULL;
+    hosts[i].server_conn = NULL;
   }
 
   /* Sort the servers by address name. So we pick consistent servers in between startups. */
@@ -284,8 +277,9 @@ struct memcached_api *memcached_api_init(struct event_base *event_base, memcache
     goto fail;
   }
 
-  if ((api->host_list = calloc(num_hosts, sizeof(struct memcached_host))) == NULL)
+  if ((api->host_list = malloc_memcpy(hosts, sizeof(struct memcached_host) * num_hosts)) == NULL) {
     goto fail;
+  }
 
   api->event_base = event_base;
 
