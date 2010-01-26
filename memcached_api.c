@@ -250,10 +250,18 @@ static int cmp_servers(const void *l, const void *r)
   return cmp_inet6(&h1->sockaddr.addr_6, &h2->sockaddr.addr_6);
 }
 
-static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_host hosts[])
+static int add_hosts(struct memcached_api *api, int num_hosts, struct sockaddr *hosts)
 {
+  socklen_t addrlen;
+
   for (int i = 0; i < num_hosts; i++) {
-    hosts[i].server_conn = NULL;
+    if (hosts->sa_family != AF_INET || hosts->sa_family != AF_INET6) {
+      errno = EAFNOSUPPORT;
+      return -1;
+    }
+
+    addrlen = (hosts->sa_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+    memcpy(&api->host_list[i].sockaddr, &hosts[i], addrlen);
   }
 
   /* Sort the servers by address name. So we pick consistent servers in between startups. */
@@ -265,7 +273,7 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_
 }
 
 struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func, int num_hosts,
-                                         struct memcached_host hosts[], enum memcached_conn conn_type, void *user_baton)
+                                         struct sockaddr *hosts, enum memcached_conn conn_type, void *user_baton)
 {
   struct memcached_api *api;
 
@@ -277,9 +285,8 @@ struct memcached_api *memcached_api_init(struct event_base *event_base, memcache
     goto fail;
   }
 
-  if ((api->host_list = malloc_memcpy(hosts, sizeof(struct memcached_host) * num_hosts)) == NULL) {
+  if ((api->host_list = calloc(num_hosts, sizeof(struct memcached_host))) == NULL)
     goto fail;
-  }
 
   api->event_base = event_base;
 

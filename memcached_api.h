@@ -59,7 +59,7 @@ int memcached_hash_ketama(const char *key, ssize_t key_len, const struct memcach
  */
 
 struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func, int num_hosts,
-                                         struct memcached_host hosts[], enum memcached_conn conn_type, void *user_baton);
+                                         struct sockaddr *hosts, enum memcached_conn conn_type, void *user_baton);
 
 void memcached_api_free(struct memcached_api *api);
 
