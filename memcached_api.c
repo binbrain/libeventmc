@@ -261,14 +261,6 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct memcached_
 
     memcpy(&dst->sockaddr, &src->sockaddr, sizeof(dst->sockaddr));
     dst->server_conn = NULL;
-
-    /* Failed to connect, free all the allocated hosts. */
-    if (dst->server_conn == NULL) {
-      for (; i >= 0; i--)
-        memcached_free(api->host_list[i].server_conn);
-
-      return -1;
-    }
   }
 
   /* Sort the servers by address name. So we pick consistent servers in between startups. */
