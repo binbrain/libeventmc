@@ -15,7 +15,6 @@
 #include "memcached_server.h"
 #include "memcached_api.h"
 #include "util.h"
-#include "crc32.h"
 
 struct pending_cmd
 {
@@ -131,28 +130,6 @@ static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_m
     CORE_ME("Elment with this opaque id already exists in the tree");
 
   return cmd;
-}
-
-
-int memcached_hash_none(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
-{
-  /* The naive case, always pick the first server */
-  return 0;
-}
-
-int memcached_hash_crc32(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
-{
-  if (num_hosts == 0)
-    return 0;
-
-  crc32t sum = crc32update(crc32init(), (const unsigned char *) key, key_len);
-  return sum % num_hosts;
-}
-
-int memcached_hash_ketama(const char *key, ssize_t key_len, const struct memcached_host *hosts, int num_hosts)
-{
-  /* TODO: Implement */
-  return -1;
 }
 
 struct memcached_host *get_host(struct memcached_api *api, const char *key, size_t key_len)
