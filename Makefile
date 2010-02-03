@@ -1,10 +1,10 @@
-EVMC_VERSION:=0.1.4
+EVMC_VERSION:=0.2.0
 EVMC_PREFIX=$(PREFIX)
 
 EVMC_CFLAGS:=-c -D_GNU_SOURCE -O2 -ggdb3 -DVERSION=\"$(EVMC_VERSION)\" -Wall --std=gnu99 -fPIC $(CFLAGS)
-EVMC_LDFLAGS:=-levent $(LDFLAGS)
+EVMC_LDFLAGS:=-lssl -levent $(LDFLAGS)
 
-EVMC_CFILES:=util.c memcached_server.c memcached_api.c hash.c crc32.c
+EVMC_CFILES:=util.c memcached_server.c memcached_api.c key.c hash.c crc32.c
 EVMC_OBJS:=$(patsubst %.c,%.o,$(EVMC_CFILES))
 
 EVMC_INSTALL_HEADERS:=memcached_server.h memcached_api.h

@@ -43,6 +43,7 @@ struct memcached_api
 
   /* List of callbacks */
   memcached_hash_func     cb_func_hash;
+  memcached_keytrans_func cb_func_keytrans;
 
   /* To keep track of which response is which. */
   uint32_t                sequence_id;
@@ -112,6 +113,23 @@ static void cb_result(struct memcached_server *server, struct memcached_msg *in_
   free(cmd);
 }
 
+static void cb_server_error(struct memcached_server *server, void *baton)
+{
+  struct memcached_api *api = (struct memcached_api *) baton;
+
+  for (int i = 0; i < api->num_host; i++) {
+    if (api->host_list[i].server_conn == server) {
+      /* TODO: Dispose of commands in flight. */
+
+      api->host_list[i].server_conn = NULL;
+      free(server);
+
+      return;
+    }
+  }
+
+  CORE_ME("cb_server_error() called with an unknown server");
+}
 
 static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_msg *msg, void *callback_func,
                                    void *callback_data)
@@ -153,34 +171,47 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   struct pending_cmd    *cmd;
   struct memcached_host *host;
 
+  /*  Key transformation functions (if there is one). */
+  if (api->cb_func_keytrans != NULL) {
+    if (api->cb_func_keytrans(msg->key, msg->key_len, &msg->key, &msg->key_len) == -1)
+      goto fail;
+  }
+
   if ((host = get_host(api, msg->key, msg->key_len)) == NULL)
-    return -1;
+    goto fail_free_key;
 
   /* Use the opaque field to keep track of which message this is. */
   msg->opaque = api->sequence_id;
 
   /* TODO: Do something better here. */
   if ((cmd = new_cmd(api, msg, callback_func, callback_data)) == NULL)
-    return -1;
+    goto fail_free_key;
 
   if (host->server_conn == NULL) {
     if ((host->server_conn = memcached_init(api->event_base, (struct sockaddr *) &host->sockaddr, api->conn_type, 
                                             cb_result, NULL, api)) == NULL)
     { 
-      return -1;
+      goto fail_free_cmd;
     }
   }
 
   /* Schedule the command to be sent, and if everything looks okay set the sequence number to the next id. */
-  if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1) {
-    RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
-    free(cmd);
+  if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1)
+    goto fail_free_cmd;
 
-    return -1;
-  } else
-    api->sequence_id++;
-
+  api->sequence_id++;
   return 0;
+
+fail_free_cmd:
+  RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
+  free(cmd);
+
+fail_free_key:
+  if (api->cb_func_keytrans != NULL)
+    free((void *) msg->key);
+
+fail:
+  return -1;
 }
 
 static inline int cmp_inet4(const struct sockaddr_in *addr1, const struct sockaddr_in *addr2)
@@ -252,8 +283,9 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct sockaddr *
   return 0;
 }
 
-struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func, int num_hosts,
-                                         struct sockaddr **hosts, enum memcached_conn conn_type, void *user_baton)
+struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func,
+                                         memcached_keytrans_func key_fun, int num_hosts, struct sockaddr **hosts,
+                                         enum memcached_conn conn_type, void *user_baton)
 {
   struct memcached_api *api;
 
@@ -264,6 +296,8 @@ struct memcached_api *memcached_api_init(struct event_base *event_base, memcache
     errno = EINVAL;
     goto fail;
   }
+
+  api->cb_func_keytrans = key_fun;
 
   if ((api->host_list = calloc(num_hosts, sizeof(struct memcached_host))) == NULL)
     goto fail;

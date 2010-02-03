@@ -121,7 +121,7 @@ static void quit_cleanup(struct memcached_server *server)
   if (server->fd != -1)
     close(server->fd);
 
-  free(server);
+  server->fd = -1;
 }
 
 static void cb_bufferevent_error(struct bufferevent *bufev, short what, void *baton)
@@ -232,12 +232,19 @@ void memcached_free(struct memcached_server *server)
 {
   /* Free the bufferevent and close the socket, if we didn't previously. */
   quit_cleanup(server);
+
+  free(server);
 }
 
 int memcached_send(struct memcached_server *server, struct memcached_msg *msg, enum memcached_data_type data_type)
 {
   struct header_raw  hdr;
   uint32_t           total_len = msg->extra_len + msg->key_len + msg->data_len;
+
+  if (server->fd == -1) {
+    errno = ENOLINK;
+    return -1;
+  }
 
   /* write out  he header */
   hdr.magic = MEMCACHED_MAGIC_REQ;

@@ -131,6 +131,7 @@
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl">
 			<F N="crc32.c"/>
 			<F N="hash.c"/>
+			<F N="key.c"/>
 			<F N="memcached_api.c"/>
 			<F N="memcached_server.c"/>
 			<F N="util.c"/>
