@@ -189,8 +189,8 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
 
   if (host->server_conn == NULL) {
     if ((host->server_conn = memcached_init(api->event_base, (struct sockaddr *) &host->sockaddr, api->conn_type, 
-                                            cb_result, NULL, api)) == NULL)
-    { 
+                                            cb_result, cb_server_error, api)) == NULL)
+    {
       goto fail_free_cmd;
     }
   }
@@ -198,6 +198,9 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   /* Schedule the command to be sent, and if everything looks okay set the sequence number to the next id. */
   if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1)
     goto fail_free_cmd;
+
+  if (api->cb_func_keytrans != NULL)
+    free((void *) msg->key);
 
   api->sequence_id++;
   return 0;
