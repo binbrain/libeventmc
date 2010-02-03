@@ -60,6 +60,7 @@ int memcached_hash_ketama(const char *key, ssize_t key_len, const struct memcach
  * Build in key transformation functions.
  * 
  */
+int memcached_key_none(const char *in_key, size_t in_len, const char **out_key, size_t *out_len);
 int memcached_key_len250(const char *in_key, size_t in_len, const char **out_key, size_t *out_len);
 int memcached_key_md5(const char *in_key, size_t in_len, const char **out_key, size_t *out_len);
 

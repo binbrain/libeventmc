@@ -18,20 +18,26 @@
 
 struct pending_cmd
 {
-  /* We use the opaque fields in memcached to */
-  uint32_t                opaque;
+  struct {
+    /* We use the opaque fields in memcached to figure out matchup sent commands to responses (and callbacks) */
+    uint32_t                  opaque;
+    enum memcached_cmd        sent_command;
 
-  enum memcached_cmd      sent_command;
+    const char    *key;
+    size_t         key_len;
+  } out_data;
+
+  void                     *callback_data;
 
   union {
-    memcached_cb_get      callback_get;
-    memcached_cb_add      callback_add;     /* add/set/replace */
-    void                 *callback_dummy;
+    memcached_cb_get        callback_get;
+    memcached_cb_add        callback_add;     /* add/set/replace */
+    void                   *callback_dummy;
   } callbacks;
 
-  void                   *callback_data;
+  struct memcached_server  *server;
 
-  RB_ENTRY(pending_cmd)   e_tree;
+  RB_ENTRY(pending_cmd)     e_tree;
 };
 
 struct memcached_api
@@ -62,7 +68,8 @@ struct memcached_api
 #define __inline inline
 
   /* Compare function for the cmd red-black tree entries. */
-  static inline int cmp_cmd(struct pending_cmd *c1, struct pending_cmd *c2) { return (c1->opaque - c2->opaque); }
+  static inline int cmp_cmd(struct pending_cmd *c1, struct pending_cmd *c2)
+    { return (c1->out_data.opaque - c2->out_data.opaque); }
 
   /* Generate functions for manipulating the tree. */
   RB_GENERATE_STATIC(rb_cmds, pending_cmd, e_tree, cmp_cmd);
@@ -72,45 +79,82 @@ struct memcached_api
 
 static inline struct pending_cmd *find_cmd(struct memcached_api *api, uint32_t opaque)
 {
-  struct pending_cmd search_cmd = { .opaque = opaque };
+  struct pending_cmd search_cmd = { .out_data.opaque = opaque };
 
   return RB_FIND(rb_cmds, &api->pending_cmd_list, &search_cmd);
 }
 
-static void cb_result(struct memcached_server *server, struct memcached_msg *in_msg, void *baton)
+static inline void free_pending_cmd(struct memcached_api *api, struct pending_cmd *cmd)
 {
-  struct memcached_api *api = (struct memcached_api *) baton;
-  struct pending_cmd   *cmd;
+  RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
+  free((char *) cmd->out_data.key);
+  free(cmd);
+}
 
-  if ((cmd = find_cmd(api, in_msg->opaque)) == NULL)
-    CORE_ME("Unable to find such value");
-
-  /* Sanity check. */
-  if (in_msg->opcode != cmd->sent_command)
-    CORE_ME("Got a result with unexpected opcode");
-
+static void do_user_callback(struct memcached_api *api, const struct memcached_msg *in_msg,
+                             const struct pending_cmd *out_cmd)
+{
   /* Run the callbacks */
-  if (cmd->callbacks.callback_dummy == NULL)
+  if (out_cmd->callbacks.callback_dummy == NULL)
     ; /* We don't care about the response */
   else if (in_msg->opcode == MEMCACHED_CMD_GET
         || in_msg->opcode == MEMCACHED_CMD_GETK)
   {
-    cmd->callbacks.callback_get(api, in_msg->status, in_msg->key, in_msg->key_len, in_msg->data, in_msg->data_len,
-                                in_msg->cas, api->user_data, cmd->callback_data);
+    out_cmd->callbacks.callback_get(api, in_msg->status, out_cmd->out_data.key, out_cmd->out_data.key_len, in_msg->data, 
+                                    in_msg->data_len, in_msg->cas, api->user_data, out_cmd->callback_data);
 
   } else if (in_msg->opcode == MEMCACHED_CMD_ADD
           || in_msg->opcode == MEMCACHED_CMD_SET
           || in_msg->opcode == MEMCACHED_CMD_REPLACE)
   {
     /* This callback can handle add/set/replace */
-    cmd->callbacks.callback_add(api, in_msg->status, in_msg->cas, api->user_data, cmd->callback_data);
+    out_cmd->callbacks.callback_add(api, in_msg->status, in_msg->cas, api->user_data, out_cmd->callback_data);
   } else {
     CORE_ME("Unimplemented result handler (cmd: %i)", in_msg->opcode);
   }
+}
+
+static void cb_result(struct memcached_server *server, struct memcached_msg *in_msg, void *baton)
+{
+  struct memcached_api *api = (struct memcached_api *) baton;
+  struct pending_cmd   *out_cmd;
+
+  if ((out_cmd = find_cmd(api, in_msg->opaque)) == NULL)
+    CORE_ME("Unable to find such value");
+
+  /* Sanity check. */
+  if (in_msg->opcode != out_cmd->out_data.sent_command)
+    CORE_ME("Got a result with unexpected opcode");
+
+  /* Run user callback */
+  do_user_callback(api, in_msg, out_cmd);
 
   /* Cleanup. */
-  RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
-  free(cmd);
+  free_pending_cmd(api, out_cmd);
+}
+
+static void fault_server_pending_cmds(struct memcached_api *api, struct memcached_server *server)
+{
+  struct pending_cmd *cur, *next;
+
+  for (cur = RB_MIN(rb_cmds, &api->pending_cmd_list); cur != NULL; cur = next) {
+    /* TODO: Have a key handy. */
+    struct memcached_msg fake_error_msg = {
+      .opcode   = cur->out_data.sent_command,
+      .status   = MEMCACHED_RESULT_CONN,
+      .opaque   = cur->out_data.opaque,
+      .cas      = 0,
+      .key      = cur->out_data.key,   .key_len    = cur->out_data.key_len,
+      .extra    = NULL,                .extra_len  = 0,
+      .data     = NULL,                .data_len   = 0,
+    };
+
+    /* Process like a regular callback */
+    do_user_callback(api, &fake_error_msg, cur);
+     
+    next = RB_NEXT(rb_cmds, &api->pennding_cmd_list, cur);
+    free_pending_cmd(api, cur);
+  }
 }
 
 static void cb_server_error(struct memcached_server *server, void *baton)
@@ -119,10 +163,11 @@ static void cb_server_error(struct memcached_server *server, void *baton)
 
   for (int i = 0; i < api->num_host; i++) {
     if (api->host_list[i].server_conn == server) {
-      /* TODO: Dispose of commands in flight. */
+      /* Error out on any pending commands on that memcached server. */
+      fault_server_pending_cmds(api, server);
 
+      memcached_free(api->host_list[i].server_conn);
       api->host_list[i].server_conn = NULL;
-      free(server);
 
       return;
     }
@@ -131,7 +176,8 @@ static void cb_server_error(struct memcached_server *server, void *baton)
   CORE_ME("cb_server_error() called with an unknown server");
 }
 
-static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_msg *msg, void *callback_func,
+static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_server *server,
+                                   struct memcached_msg *msg, const char *key, size_t key_len, void *callback_func,
                                    void *callback_data)
 {
   struct pending_cmd *cmd;
@@ -139,10 +185,14 @@ static struct pending_cmd *new_cmd(struct memcached_api *api, struct memcached_m
   if ((cmd = calloc(1, sizeof(*cmd))) == NULL)
     return NULL;
 
-  cmd->opaque = msg->opaque;
-  cmd->sent_command = msg->opcode;
+  cmd->out_data.opaque = msg->opaque;
+  cmd->out_data.sent_command = msg->opcode;
+  cmd->out_data.key = key;
+  cmd->out_data.key_len = key_len;
+
   cmd->callbacks.callback_dummy = callback_func;
   cmd->callback_data = callback_data;
+  cmd->server = server;
 
   if (RB_INSERT(rb_cmds, &api->pending_cmd_list, cmd) != NULL)
     CORE_ME("Elment with this opaque id already exists in the tree");
@@ -171,11 +221,12 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   struct pending_cmd    *cmd;
   struct memcached_host *host;
 
+  const char            *key_after;
+  size_t                 key_len;
+
   /*  Key transformation functions (if there is one). */
-  if (api->cb_func_keytrans != NULL) {
-    if (api->cb_func_keytrans(msg->key, msg->key_len, &msg->key, &msg->key_len) == -1)
-      goto fail;
-  }
+  if (api->cb_func_keytrans(msg->key, msg->key_len, &key_after, &key_len) == -1)
+    goto fail;
 
   if ((host = get_host(api, msg->key, msg->key_len)) == NULL)
     goto fail_free_key;
@@ -183,35 +234,33 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   /* Use the opaque field to keep track of which message this is. */
   msg->opaque = api->sequence_id;
 
-  /* TODO: Do something better here. */
-  if ((cmd = new_cmd(api, msg, callback_func, callback_data)) == NULL)
-    goto fail_free_key;
-
   if (host->server_conn == NULL) {
     if ((host->server_conn = memcached_init(api->event_base, (struct sockaddr *) &host->sockaddr, api->conn_type, 
                                             cb_result, cb_server_error, api)) == NULL)
     {
-      goto fail_free_cmd;
+      goto fail_free_key;
     }
   }
+
+  /* New server command entry, so we know how to dispatch a callback when it comes back. */
+  if ((cmd = new_cmd(api, host->server_conn, msg, key_after, key_len, callback_func, callback_data)) == NULL)
+    goto fail_free_key;
+
+  /* NOTE: Set this to null so we don't double free it in case of a error!!! */
+  key_after = NULL;
 
   /* Schedule the command to be sent, and if everything looks okay set the sequence number to the next id. */
   if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1)
     goto fail_free_cmd;
 
-  if (api->cb_func_keytrans != NULL)
-    free((void *) msg->key);
-
   api->sequence_id++;
   return 0;
 
 fail_free_cmd:
-  RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
-  free(cmd);
+  free_pending_cmd(api, cmd);
 
 fail_free_key:
-  if (api->cb_func_keytrans != NULL)
-    free((void *) msg->key);
+  free((char *) key_after);
 
 fail:
   return -1;
@@ -300,7 +349,10 @@ struct memcached_api *memcached_api_init(struct event_base *event_base, memcache
     goto fail;
   }
 
-  api->cb_func_keytrans = key_fun;
+  if ((api->cb_func_keytrans = key_fun) == NULL) {
+    errno = EINVAL;
+    goto fail;
+  }
 
   if ((api->host_list = calloc(num_hosts, sizeof(struct memcached_host))) == NULL)
     goto fail;
@@ -349,7 +401,7 @@ int memcached_api_get(struct memcached_api *api, const char *key, size_t key_len
                       void *callback_data)
 {
   struct memcached_msg msg = {
-    .opcode     = MEMCACHED_CMD_GETK,
+    .opcode     = MEMCACHED_CMD_GET,
     .key        = key,
     .key_len    = key_len,
     .extra      = NULL,
