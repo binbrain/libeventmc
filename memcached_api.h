@@ -39,6 +39,9 @@ typedef void (*memcached_cb_set)(struct memcached_api *api, enum memcached_resul
 typedef void (*memcached_cb_replace)(struct memcached_api *api, enum memcached_result status, uint64_t cas,
                                      void *api_baton, void *cmd_baton);
 
+/* A command we don't know about came back. */
+typedef void (*memcached_cb_unknown)(struct memcached_api *api, const struct memcached_msg *in_msg, void *api_baton);
+
 
 /* Hashing function callback prototype (for specifing custom hash functions). */
 typedef int (*memcached_hash_func)(const char *const key, ssize_t key_len, const struct memcached_host *hosts,
@@ -66,15 +69,30 @@ int memcached_key_md5(const char *in_key, size_t in_len, const char **out_key, s
 
 
 /*
+ * Misc. built in callback functions.
+ */
+
+/* Ignore unknown id returns. */
+void memcached_unkown_id_ignore(struct memcached_api *api, const struct memcached_msg *in_msg, void *api_baton);
+
+/*
  * Initlize and tear down an memcached api instance.
  */
 
 struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func,
-                                         memcached_keytrans_func key_fun, int num_hosts, struct sockaddr **hosts,
-                                         enum memcached_conn conn_type, void *user_baton);
+                                         memcached_keytrans_func key_fun, memcached_cb_unknown cb_unknown_id,
+                                         int num_hosts, struct sockaddr **hosts, enum memcached_conn conn_type,
+                                         void *api_baton);
 
 void memcached_api_free(struct memcached_api *api);
 
+
+/*
+ * Operations on the current memcached api instance.
+ */
+
+/* Prune current pending commands (and fault them). */
+void memcached_api_prune_pending(struct memcached_api *api);
 
 /*
  * Abstracted memcachecd commands.

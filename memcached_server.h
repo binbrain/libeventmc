@@ -31,6 +31,7 @@ enum memcached_cmd {
 
 enum memcached_result {
   /* non operational errors */
+  MEMCACHED_RESULT_CANCELED   = -0x02,
   MEMCACHED_RESULT_CONN       = -0x01,
   /* result values */
   MEMCACHED_RESULT_SUCCESS    = 0x00,

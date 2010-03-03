@@ -50,6 +50,7 @@ struct memcached_api
   /* List of callbacks */
   memcached_hash_func     cb_func_hash;
   memcached_keytrans_func cb_func_keytrans;
+  memcached_cb_unknown    cb_unknown_id;
 
   /* To keep track of which response is which. */
   uint32_t                sequence_id;
@@ -84,14 +85,23 @@ static inline struct pending_cmd *find_cmd(struct memcached_api *api, uint32_t o
   return RB_FIND(rb_cmds, &api->pending_cmd_list, &search_cmd);
 }
 
-static inline void free_pending_cmd(struct memcached_api *api, struct pending_cmd *cmd)
+static inline void free_pending_cmd(struct memcached_api *api, struct pending_cmd * restrict cmd)
 {
   RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
   free((char *) cmd->out_data.key);
   free(cmd);
 }
 
-static void do_user_callback(struct memcached_api *api, const struct memcached_msg *in_msg,
+static void do_unknown_id_callback(struct memcached_api *api, const struct memcached_msg * restrict in_msg)
+{
+  /* If there's is no unknown command id callback defined then perform a fault here. */
+  if (api->cb_unknown_id == NULL)
+    CORE_ME("Got an unknown a response with an unknown id back.");
+
+  api->cb_unknown_id(api, in_msg, api->user_data);
+}
+
+static void do_user_callback(struct memcached_api *api, const struct memcached_msg * restrict in_msg,
                              const struct pending_cmd *out_cmd)
 {
   /* Run the callbacks */
@@ -119,8 +129,10 @@ static void cb_result(struct memcached_server *server, struct memcached_msg *in_
   struct memcached_api *api = (struct memcached_api *) baton;
   struct pending_cmd   *out_cmd;
 
-  if ((out_cmd = find_cmd(api, in_msg->opaque)) == NULL)
-    CORE_ME("Unable to find such value");
+  if ((out_cmd = find_cmd(api, in_msg->opaque)) == NULL) {
+    do_unknown_id_callback(api, in_msg);
+    return;
+  }
 
   /* Sanity check. */
   if (in_msg->opcode != out_cmd->out_data.sent_command)
@@ -133,27 +145,36 @@ static void cb_result(struct memcached_server *server, struct memcached_msg *in_
   free_pending_cmd(api, out_cmd);
 }
 
+static void fault_pending_cmd(struct memcached_api *api, enum memcached_result reason,
+                              struct pending_cmd * restrict cmd)
+{
+  struct memcached_msg fake_error_msg = {
+    .opcode   = cmd->out_data.sent_command,
+    .status   = reason,
+    .opaque   = cmd->out_data.opaque,
+    .cas      = 0,
+    .key      = cmd->out_data.key,   .key_len    = cmd->out_data.key_len,
+    .extra    = NULL,                .extra_len  = 0,
+    .data     = NULL,                .data_len   = 0,
+  };
+
+  /* Process like a regular callback. */
+  do_user_callback(api, &fake_error_msg, cmd);
+
+  /* Get rid of the command entry and it's related data. */
+  free_pending_cmd(api, cmd);
+}
+
 static void fault_server_pending_cmds(struct memcached_api *api, struct memcached_server *server)
 {
   struct pending_cmd *cur, *next;
 
   for (cur = RB_MIN(rb_cmds, &api->pending_cmd_list); cur != NULL; cur = next) {
-    /* TODO: Have a key handy. */
-    struct memcached_msg fake_error_msg = {
-      .opcode   = cur->out_data.sent_command,
-      .status   = MEMCACHED_RESULT_CONN,
-      .opaque   = cur->out_data.opaque,
-      .cas      = 0,
-      .key      = cur->out_data.key,   .key_len    = cur->out_data.key_len,
-      .extra    = NULL,                .extra_len  = 0,
-      .data     = NULL,                .data_len   = 0,
-    };
-
-    /* Process like a regular callback */
-    do_user_callback(api, &fake_error_msg, cur);
-     
     next = RB_NEXT(rb_cmds, &api->pennding_cmd_list, cur);
-    free_pending_cmd(api, cur);
+
+    /* Send connection failed callback to all pending command listeners. */
+    if (cur->server == server)
+      fault_pending_cmd(api, MEMCACHED_RESULT_CONN, cur);
   }
 }
 
@@ -253,8 +274,10 @@ static int server_command_poxy(struct memcached_api *api, struct memcached_msg *
   if ((result = memcached_send(host->server_conn, msg, MEMCACHED_DT_BYTES)) == -1)
     goto fail_free_cmd;
 
-  api->sequence_id++;
-  return 0;
+  /* Roll over the sequence id to 0 if we're over 31 bits (to allow for negative return values) */
+  api->sequence_id = (api->sequence_id + 1 > INT32_MAX) ? 0 : api->sequence_id + 1;
+
+  return api->sequence_id;
 
 fail_free_cmd:
   free_pending_cmd(api, cmd);
@@ -336,23 +359,28 @@ static int add_hosts(struct memcached_api *api, int num_hosts, struct sockaddr *
 }
 
 struct memcached_api *memcached_api_init(struct event_base *event_base, memcached_hash_func hash_func,
-                                         memcached_keytrans_func key_fun, int num_hosts, struct sockaddr **hosts,
-                                         enum memcached_conn conn_type, void *user_baton)
+                                         memcached_keytrans_func key_fun, memcached_cb_unknown cb_unknown_id,
+                                         int num_hosts, struct sockaddr **hosts, enum memcached_conn conn_type,
+                                         void *api_baton)
 {
   struct memcached_api *api;
 
   if ((api = calloc(1, sizeof(*api))) == NULL)
     return NULL;
 
+  /* A hash function needs to be specified. */
   if ((api->cb_func_hash = hash_func) == NULL) {
     errno = EINVAL;
     goto fail;
   }
 
+  /* Key transofmration function needs to be specified. */
   if ((api->cb_func_keytrans = key_fun) == NULL) {
     errno = EINVAL;
     goto fail;
   }
+
+  api->cb_unknown_id = cb_unknown_id;
 
   if ((api->host_list = calloc(num_hosts, sizeof(struct memcached_host))) == NULL)
     goto fail;
@@ -366,7 +394,7 @@ struct memcached_api *memcached_api_init(struct event_base *event_base, memcache
   RB_INIT(&api->pending_cmd_list);
 
   /* Userdata to pass back with callbacks */
-  api->user_data = user_baton;
+  api->user_data = api_baton;
 
   if (add_hosts(api, num_hosts, hosts) == -1)
     goto fail;
@@ -388,13 +416,32 @@ void memcached_api_free(struct memcached_api *api)
   /* Free the data allocated for all the pending commands.*/
   struct pending_cmd *next_cmd, *cur_cmd;
 	for (cur_cmd = RB_MIN(rb_cmds, &api->pending_cmd_list); cur_cmd != NULL; cur_cmd = next_cmd) {
-		   next_cmd = RB_NEXT(rb_cmds, &api->pending_cmd_list, cur_cmd);
-		   RB_REMOVE(rb_cmds, &api->pending_cmd_list, cur_cmd);
-		   free(cur_cmd);
+	  next_cmd = RB_NEXT(rb_cmds, &api->pending_cmd_list, cur_cmd);
+
+    /* Free the pending commands (and their data) without issuing callbacks. */
+		free_pending_cmd(api, cur_cmd);
 	}
 
   free(api->host_list);
   free(api);
+}
+
+void memcached_unkown_id_ignore(struct memcached_api *api, const struct memcached_msg *in_msg, void *api_baton)
+{
+  /* Do nothing, ignore the unknown id error. */
+  return;
+}
+
+void memcached_api_prune_pending(struct memcached_api *api)
+{
+  struct pending_cmd *next_cmd, *cur_cmd;
+
+  for (cur_cmd = RB_MIN(rb_cmds, &api->pending_cmd_list); cur_cmd != NULL; cur_cmd = next_cmd) {
+	  next_cmd = RB_NEXT(rb_cmds, &api->pending_cmd_list, cur_cmd);
+
+    /* Fault the command (do any callbacks) with a canceled status. */
+    fault_pending_cmd(api, MEMCACHED_RESULT_CANCELED, cur_cmd);
+	}
 }
 
 int memcached_api_get(struct memcached_api *api, const char *key, size_t key_len, memcached_cb_get callback_func,
