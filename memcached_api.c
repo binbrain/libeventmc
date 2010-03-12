@@ -85,7 +85,7 @@ static inline struct pending_cmd *find_cmd(struct memcached_api *api, uint32_t o
   return RB_FIND(rb_cmds, &api->pending_cmd_list, &search_cmd);
 }
 
-static inline void free_pending_cmd(struct memcached_api *api, struct pending_cmd * restrict cmd)
+static inline void free_pending_cmd(struct memcached_api *api, struct pending_cmd * cmd)
 {
   RB_REMOVE(rb_cmds, &api->pending_cmd_list, cmd);
   free((char *) cmd->out_data.key);
@@ -145,8 +145,7 @@ static void cb_result(struct memcached_server *server, struct memcached_msg *in_
   free_pending_cmd(api, out_cmd);
 }
 
-static void fault_pending_cmd(struct memcached_api *api, enum memcached_result reason,
-                              struct pending_cmd * restrict cmd)
+static void fault_pending_cmd(struct memcached_api *api, enum memcached_result reason, struct pending_cmd * cmd)
 {
   struct memcached_msg fake_error_msg = {
     .opcode   = cmd->out_data.sent_command,
