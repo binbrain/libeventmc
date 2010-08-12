@@ -80,27 +80,28 @@ static void cb_bufferevent_read(struct bufferevent *bufferevent, void *baton)
 {
   struct memcached_server *server = (struct memcached_server *) baton;
   struct evbuffer         *input = EVBUFFER_INPUT(bufferevent);
-  struct header_raw       *hdr = (struct header_raw *) EVBUFFER_DATA(input);
+  struct header_raw       *hdr;
+  size_t                   response_len;
 
-  size_t response_len = sizeof(struct header_raw) + ntohl(hdr->total_len);
+/* A loop in case we have more data pending */
+next_msg:
+  hdr = (struct header_raw *) EVBUFFER_DATA(input);
+  response_len = sizeof(struct header_raw) + ntohl(hdr->total_len);
 
-  if (EVBUFFER_LENGTH(input) == sizeof(struct header_raw)) {
+  if (EVBUFFER_LENGTH(input) < response_len) {
     /* If this response comes with extra data, set the water mark and wait till we have the header and data. */
-    if (hdr->total_len > 0) {
-      bufferevent_setwatermark(bufferevent, EV_READ, response_len, 0);
-      return;
-    }
-
-    /* This response has no data. */
+    bufferevent_setwatermark(bufferevent, EV_READ, response_len, 0);
+    return;
   }
-
-  if (EVBUFFER_LENGTH(input) < response_len) 
-    CORE_ME("Expected to have all the data, but called with a partial buffer.");
 
   run_callback(server, input);
 
-  /* Get rid of the last message. */
+  /* Get rid of the last parsed message. */
   evbuffer_drain(bufferevent->input, response_len);
+
+  /* Check if we (possibly) have another whole message in the buffer */
+  if (EVBUFFER_LENGTH(input) >= sizeof(struct header_raw))
+    goto next_msg;
 
   /* Wait for the next header to come in over the wire. */
   bufferevent_setwatermark(bufferevent, EV_READ, sizeof(struct header_raw), 0);
@@ -215,7 +216,7 @@ struct memcached_server *memcached_init(struct event_base *event_base, struct so
   }
 
   /* Stop reading after we get the header */
-  bufferevent_setwatermark(server->buffer, EV_READ, sizeof(struct header_raw), sizeof(struct header_raw));
+  bufferevent_setwatermark(server->buffer, EV_READ, sizeof(struct header_raw), 0);
 
   if (bufferevent_enable(server->buffer, EV_READ|EV_WRITE) == -1)
     goto fail;
