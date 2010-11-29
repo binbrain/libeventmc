@@ -1,3 +1,12 @@
+/* libeventmc - Memcached client bindings for libevent.
+ * Copyright (C) 2010 Admeld Inc, Milosz Tanski <mtanski@admeld.com>
+ *
+ * The source code for the libmeldmc library is licensed under the MIT license or
+ * at your option under the GPL version 2 license. The contents of the both
+ * licenses are contained within the libevemtmc distribution in COPYING.txt file.
+ *
+ */
+
 /* libc */
 #include <errno.h>
 #include <stdbool.h>
@@ -12,7 +21,7 @@
 #include <event-config.h>
 #include <event.h>
 #include <evutil.h>
-/* event_memcached */
+/* libeventmc */
 #include "memcached_server.h"
 #include "util.h"
 
