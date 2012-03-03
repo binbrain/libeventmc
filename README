@@ -1,0 +1,3 @@
+libeventmc
+==========
+Provides memcached bindings for libevent.

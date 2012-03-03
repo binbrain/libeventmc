@@ -310,13 +310,13 @@ static inline int cmp_inet6(const struct sockaddr_in6 *addr1, const struct socka
 {
   int cmp_result;
 
-  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[0] - addr2->sin6_addr.in6_u.u6_addr32[0]))
+  if ((cmp_result = addr1->sin6_addr.__in6_u.__u6_addr32[0] - addr2->sin6_addr.__in6_u.__u6_addr32[0]))
     return cmp_result;
-  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[1] - addr2->sin6_addr.in6_u.u6_addr32[1]))
+  if ((cmp_result = addr1->sin6_addr.__in6_u.__u6_addr32[1] - addr2->sin6_addr.__in6_u.__u6_addr32[1]))
     return cmp_result;
-  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[2] - addr2->sin6_addr.in6_u.u6_addr32[2]))
+  if ((cmp_result = addr1->sin6_addr.__in6_u.__u6_addr32[2] - addr2->sin6_addr.__in6_u.__u6_addr32[2]))
     return cmp_result;
-  if ((cmp_result = addr1->sin6_addr.in6_u.u6_addr32[3] - addr2->sin6_addr.in6_u.u6_addr32[3]))
+  if ((cmp_result = addr1->sin6_addr.__in6_u.__u6_addr32[3] - addr2->sin6_addr.__in6_u.__u6_addr32[3]))
     return cmp_result;
 
   return addr1->sin6_port - addr2->sin6_port;
